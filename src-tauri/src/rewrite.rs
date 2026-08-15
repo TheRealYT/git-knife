@@ -168,13 +168,8 @@ fn commit_tree(
         ("GIT_COMMITTER_DATE", committer_date),
     ];
 
-    let mut msg = message.to_string();
-    if !msg.ends_with('\n') {
-        msg.push('\n');
-    }
-
     let argrefs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = git::run(repo, &argrefs, &env, Some(&msg))?;
+    let out = git::run(repo, &argrefs, &env, Some(message))?;
     Ok(out.trim().to_string())
 }
 

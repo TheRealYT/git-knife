@@ -1,28 +1,23 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod backup;
-mod commits;
-mod git;
-mod rewrite;
-
-use backup::Backup;
-use commits::{Branch, Commit, RepoInfo};
-use rewrite::{ApplyResult, CommitEdit, FieldChange};
+use git_knife::backup::Backup;
+use git_knife::commits::{Branch, Commit, RepoInfo};
+use git_knife::rewrite::{ApplyResult, CommitEdit, FieldChange};
 
 #[tauri::command]
 fn open_repo(path: String) -> Result<RepoInfo, String> {
-    commits::open_repo(&path)
+    git_knife::commits::open_repo(&path)
 }
 
 #[tauri::command]
 fn list_branches(path: String) -> Result<Vec<Branch>, String> {
-    commits::list_branches(&path)
+    git_knife::commits::list_branches(&path)
 }
 
 #[tauri::command]
 fn list_commits(path: String, branch: String, limit: u32) -> Result<Vec<Commit>, String> {
-    commits::list_commits(&path, &branch, limit)
+    git_knife::commits::list_commits(&path, &branch, limit)
 }
 
 #[tauri::command]
@@ -31,7 +26,7 @@ fn preview_edits(
     branch: String,
     edits: Vec<CommitEdit>,
 ) -> Result<Vec<FieldChange>, String> {
-    rewrite::preview_edits(&path, &branch, &edits)
+    git_knife::rewrite::preview_edits(&path, &branch, &edits)
 }
 
 #[tauri::command]
@@ -42,17 +37,17 @@ fn apply_edits(
     sign: bool,
     resign: bool,
 ) -> Result<ApplyResult, String> {
-    rewrite::apply_edits(&path, &branch, &edits, sign, resign)
+    git_knife::rewrite::apply_edits(&path, &branch, &edits, sign, resign)
 }
 
 #[tauri::command]
 fn list_backups(path: String) -> Result<Vec<Backup>, String> {
-    backup::list_backups(&path)
+    git_knife::backup::list_backups(&path)
 }
 
 #[tauri::command]
 fn restore_backup(path: String, ref_name: String) -> Result<(), String> {
-    backup::restore_backup(&path, &ref_name)
+    git_knife::backup::restore_backup(&path, &ref_name)
 }
 
 fn main() {
