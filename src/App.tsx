@@ -28,7 +28,7 @@ import {
   type BulkSpec,
 } from "./bulk";
 
-const LIMIT = 200;
+const LIMIT = 1000;
 
 export default function App() {
   const [pathInput, setPathInput] = useState("");

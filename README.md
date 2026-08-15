@@ -123,6 +123,35 @@ Example — move every commit from an old email to a new one: target *Author
 email* + *Committer email*, find `old@example.com`, replace `new@example.com`.
 Merge commits are included, and successive passes compose.
 
+### Repeatable batch rewrites (CLI)
+
+For scripted migrations, the same rewrite engine is available as a small JSON
+stdin/stdout runner:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --release --bin bulk_rewrite <<'JSON'
+{
+  "path": "/path/to/repository",
+  "branch": "main",
+  "edits": [
+    {
+      "hash": "0123456789abcdef0123456789abcdef01234567",
+      "authorName": "Foo",
+      "authorEmail": "foo@example.com",
+      "committerName": "Bar",
+      "committerEmail": "bar@example.com"
+    }
+  ]
+}
+JSON
+```
+
+Each edit can override any combination of author/committer names, emails,
+dates, and the full message; omitted fields remain unchanged. The runner emits
+the new tip, backup ref, and rewritten count as JSON. It uses the same backup
+ref and compare-and-swap update as the GUI, so a remote push remains an
+explicit `git push --force-with-lease` step.
+
 ### Push a rewrite
 
 Editing a commit changes its hash **and the hash of every commit after it**, so
