@@ -1,11 +1,31 @@
+# Dependencies
 node_modules/
-dist/
-*.log
 
-# Rust / Tauri
+# Frontend build output
+dist/
+dist-ssr/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Rust / Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
 
 # IDE
 .idea/
 .vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
