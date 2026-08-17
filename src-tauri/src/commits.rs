@@ -109,12 +109,23 @@ pub struct Commit {
 
 /// Validate a path is inside a git repo and return branch/HEAD/upstream info.
 pub fn open_repo(path: &str) -> Result<RepoInfo, String> {
-    let top = git::run(path, &["rev-parse", "--show-toplevel"], &[], None)
-        .map_err(|_| format!("Not a git repository: {path}"))?
+    // One pass resolves the toplevel and current branch name.
+    let out = git::run(
+        path,
+        &["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"],
+        &[],
+        None,
+    )
+    .map_err(|_| format!("Not a git repository: {path}"))?;
+    let mut lines = out.lines();
+    let top = lines
+        .next()
+        .ok_or_else(|| format!("Not a git repository: {path}"))?
         .trim()
         .to_string();
-
-    let branch = git::run(&top, &["rev-parse", "--abbrev-ref", "HEAD"], &[], None)?
+    let branch = lines
+        .next()
+        .ok_or_else(|| "Repository has no commits yet".to_string())?
         .trim()
         .to_string();
 
@@ -170,7 +181,7 @@ pub struct Branch {
 /// List local branches with their tip, upstream, and unpushed count.
 pub fn list_branches(repo: &str) -> Result<Vec<Branch>, String> {
     let fmt = format!(
-        "--format=%(refname:short){US}%(objectname){US}%(upstream:short){US}%(HEAD)"
+        "--format=%(refname:short){US}%(objectname){US}%(upstream:short){US}%(HEAD){US}%(upstream:track,nobracket)"
     );
     let out = git::run(repo, &["for-each-ref", &fmt, "refs/heads"], &[], None)?;
 
@@ -180,25 +191,33 @@ pub fn list_branches(repo: &str) -> Result<Vec<Branch>, String> {
             continue;
         }
         let f: Vec<&str> = line.split(US).collect();
-        if f.len() < 4 {
+        if f.len() < 5 {
             continue;
         }
         let name = f[0].to_string();
-        let upstream = if f[2].is_empty() {
-            None
-        } else {
+        let has_upstream = !f[2].is_empty();
+        let upstream = if has_upstream {
             Some(f[2].to_string())
+        } else {
+            None
         };
-        let ahead_of_upstream = upstream.as_ref().and_then(|up| {
-            git::run(
-                repo,
-                &["rev-list", "--count", &format!("{up}..{name}")],
-                &[],
-                None,
+        // `%(upstream:track,nobracket)` yields "ahead N, behind M", or empty
+        // when the branch is in sync or has no upstream. Parsed here so the
+        // whole list comes from one for-each-ref pass — no per-branch process.
+        let ahead_of_upstream = if has_upstream {
+            Some(
+                f[4]
+                    .split(',')
+                    .find_map(|part| {
+                        part.trim()
+                            .strip_prefix("ahead ")
+                            .and_then(|n| n.parse::<u32>().ok())
+                    })
+                    .unwrap_or(0),
             )
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-        });
+        } else {
+            None
+        };
         branches.push(Branch {
             name,
             is_head: f[3].trim() == "*",

@@ -3,6 +3,8 @@
 *Stab your git history into shape — every commit's message, author, and dates,
 edited like a table.*
 
+**English** · [中文文档](./README.zh-CN.md)
+
 ![git-knife screenshot](docs/screenshot.png)
 
 A clean desktop GUI for editing git commit metadata directly — **message,
@@ -204,12 +206,20 @@ git update-ref -d refs/notes/git-knife
   and moves the branch with a compare-and-swap on the old tip.
 - `backup.rs` — lists `refs/knife-backup/*` and restores via `git reset --hard`.
 
-The rewrite strategy is validated at the git level by
-`scratchpad/verify_engine.sh` (reproduces the exact commit-tree flow and asserts
-the content diff is empty).
+All git subprocesses run on a background thread, never the UI thread — opening a
+repo, switching branches, and rewriting large histories stay responsive even
+while many git processes churn underneath. Branch ahead/behind counts come from a
+single `for-each-ref` pass (no per-branch process), and on Windows children are
+spawned with their console hidden (`CREATE_NO_WINDOW`), so no terminal window
+ever flashes.
 
 ## Safety
 
 Every apply creates `refs/knife-backup/<branch>/<epoch>` pointing at the old tip
 before touching anything. Nothing is force-deleted; restore is always available
 from the Backups panel.
+
+If a rewrite or restore fails, the error is shown both as an in-app banner and
+as a native dialog — a failed history rewrite is never silently missed. The
+branch ref only moves after every rebuilt commit succeeds, so a mid-rewrite
+failure leaves the branch untouched.

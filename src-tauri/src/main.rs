@@ -10,49 +10,69 @@ use backup::Backup;
 use commits::{Branch, Commit, RepoInfo};
 use rewrite::{ApplyResult, CommitEdit, FieldChange};
 
+// Tauri 2 runs synchronous commands on the main thread, so every blocking
+// command is wrapped in spawn_blocking to keep the UI responsive while git
+// subprocesses run.
+
 #[tauri::command]
-fn open_repo(path: String) -> Result<RepoInfo, String> {
-    commits::open_repo(&path)
+async fn open_repo(path: String) -> Result<RepoInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || commits::open_repo(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_branches(path: String) -> Result<Vec<Branch>, String> {
-    commits::list_branches(&path)
+async fn list_branches(path: String) -> Result<Vec<Branch>, String> {
+    tauri::async_runtime::spawn_blocking(move || commits::list_branches(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_commits(path: String, branch: String, limit: u32) -> Result<Vec<Commit>, String> {
-    commits::list_commits(&path, &branch, limit)
+async fn list_commits(path: String, branch: String, limit: u32) -> Result<Vec<Commit>, String> {
+    tauri::async_runtime::spawn_blocking(move || commits::list_commits(&path, &branch, limit))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn preview_edits(
+async fn preview_edits(
     path: String,
     branch: String,
     edits: Vec<CommitEdit>,
 ) -> Result<Vec<FieldChange>, String> {
-    rewrite::preview_edits(&path, &branch, &edits)
+    tauri::async_runtime::spawn_blocking(move || rewrite::preview_edits(&path, &branch, &edits))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn apply_edits(
+async fn apply_edits(
     path: String,
     branch: String,
     edits: Vec<CommitEdit>,
     sign: bool,
     resign: bool,
 ) -> Result<ApplyResult, String> {
-    rewrite::apply_edits(&path, &branch, &edits, sign, resign)
+    tauri::async_runtime::spawn_blocking(move || {
+        rewrite::apply_edits(&path, &branch, &edits, sign, resign)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_backups(path: String) -> Result<Vec<Backup>, String> {
-    backup::list_backups(&path)
+async fn list_backups(path: String) -> Result<Vec<Backup>, String> {
+    tauri::async_runtime::spawn_blocking(move || backup::list_backups(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn restore_backup(path: String, ref_name: String) -> Result<(), String> {
-    backup::restore_backup(&path, &ref_name)
+async fn restore_backup(path: String, ref_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || backup::restore_backup(&path, &ref_name))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn main() {

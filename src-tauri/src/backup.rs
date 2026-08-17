@@ -26,8 +26,9 @@ pub struct Backup {
 
 /// List all knife backup refs, newest first.
 pub fn list_backups(path: &str) -> Result<Vec<Backup>, String> {
-    let info = commits::open_repo(path)?;
-    let repo = info.path.as_str();
+    // `path` is already the repository toplevel (the frontend passes it through
+    // from open_repo), so skip re-resolving it here.
+    let repo = path;
 
     let out = git::run(
         repo,

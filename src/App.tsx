@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, ask, message } from "@tauri-apps/plugin-dialog";
 import {
   applyEdits,
   listBackups,
@@ -63,6 +63,17 @@ export default function App() {
   function toggleResign(next: boolean) {
     setResign(next);
     localStorage.setItem("knife.resign", next ? "1" : "0");
+  }
+
+  // Surface a failure both in-app (banner) and as a native dialog, so a failed
+  // history rewrite can't be missed.
+  async function notifyError(title: string, detail: string) {
+    setError(detail);
+    try {
+      await message(detail, { title, kind: "error" });
+    } catch {
+      // Dialog unavailable (e.g. plain web dev) — the banner is still shown.
+    }
   }
 
   const dirtyCount = Object.keys(edits).length;
@@ -264,7 +275,7 @@ export default function App() {
       setBranches(await listBranches(info.path));
       await reload(info.path, branch);
     } catch (e) {
-      setError(String(e));
+      await notifyError("Rewrite failed", String(e));
     } finally {
       setBusy(false);
     }
@@ -290,7 +301,7 @@ export default function App() {
       setBranches(await listBranches(info.path));
       await reload(info.path, branch);
     } catch (e) {
-      setError(String(e));
+      await notifyError("Restore failed", String(e));
     } finally {
       setBusy(false);
     }

@@ -184,11 +184,10 @@ pub fn preview_edits(
     branch: &str,
     edits: &[CommitEdit],
 ) -> Result<Vec<FieldChange>, String> {
-    let info = commits::open_repo(path)?;
-    let tip = git::run(&info.path, &["rev-parse", branch], &[], None)?
-        .trim()
-        .to_string();
-    let chain = read_chain(&info.path, &tip)?;
+    // `path` is already the toplevel (the frontend passes it through from
+    // open_repo), and `git log` accepts a branch name directly — so neither a
+    // rev-parse nor an open_repo round-trip is needed here.
+    let chain = read_chain(path, branch)?;
     let by_hash: HashMap<&str, &RawCommit> = chain.iter().map(|c| (c.hash.as_str(), c)).collect();
 
     let mut changes = Vec::new();
@@ -272,14 +271,16 @@ pub fn apply_edits(
     sign: bool,
     resign: bool,
 ) -> Result<ApplyResult, String> {
-    let info = commits::open_repo(path)?;
-    let repo = info.path.as_str();
-    // Resolve the tip of the *selected* branch (not necessarily HEAD).
-    let head = git::run(repo, &["rev-parse", branch], &[], None)?
-        .trim()
-        .to_string();
-
-    let chain = read_chain(repo, &head)?;
+    // `path` is already the toplevel (the frontend passes it through from
+    // open_repo), and `git log` accepts a branch name directly — so neither a
+    // rev-parse nor an open_repo round-trip is needed here.
+    let repo = path;
+    let chain = read_chain(repo, branch)?;
+    // chain is newest-first, so its first entry is the branch tip.
+    let head = chain
+        .first()
+        .map(|c| c.hash.clone())
+        .ok_or_else(|| format!("Branch {branch} has no commits"))?;
     let edit_map: HashMap<&str, &CommitEdit> =
         edits.iter().map(|e| (e.hash.as_str(), e)).collect();
 
