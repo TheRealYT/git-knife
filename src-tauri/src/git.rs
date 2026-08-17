@@ -15,6 +15,13 @@ pub fn run_bytes(
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(repo).args(args);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env("LC_ALL", "C");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Never show a console window for a git child process, even when the
+        // parent has no console of its own.
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(if stdin.is_some() {
@@ -60,6 +67,13 @@ pub fn run(
     // Keep git non-interactive and locale-stable.
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("LC_ALL", "C");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Never show a console window for a git child process, even when the
+        // parent has no console of its own.
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
