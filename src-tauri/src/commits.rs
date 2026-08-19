@@ -14,31 +14,16 @@ use crate::git;
 const US: char = '\u{1f}'; // unit separator, between fields
 const RS: char = '\u{1e}'; // record separator, between commits
 
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
     (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
-/// Determine which of `hashes` are signed commits, by presence of a `gpgsig`
-/// header in the raw object — independent of whether the signature can be
-/// *verified* (SSH signatures report as unsigned via `%G?` without an
-/// allowedSignersFile, so we must not rely on verification here).
-///
-/// Uses a single `git cat-file --batch` pass, framed by the byte sizes it
-/// reports, so it is correct for arbitrary (multi-byte) commit content.
-pub fn signed_set(repo: &str, hashes: &[String]) -> HashSet<String> {
+/// Parse raw bytes from `git cat-file --batch` to detect commits containing a `gpgsig` header.
+pub fn parse_batch_signed(out: &[u8]) -> HashSet<String> {
     let mut signed = HashSet::new();
-    if hashes.is_empty() {
-        return signed;
-    }
-    let stdin = format!("{}\n", hashes.join("\n"));
-    let out = match git::run_bytes(repo, &["cat-file", "--batch"], Some(&stdin)) {
-        Ok(o) => o,
-        Err(_) => return signed,
-    };
-
     let mut i = 0;
     while i < out.len() {
         // Header line: "<sha> <type> <size>" or "<sha> missing".
@@ -72,7 +57,25 @@ pub fn signed_set(repo: &str, hashes: &[String]) -> HashSet<String> {
     signed
 }
 
-#[derive(Serialize)]
+/// Determine which of `hashes` are signed commits, by presence of a `gpgsig`
+/// header in the raw object — independent of whether the signature can be
+/// *verified* (SSH signatures report as unsigned via `%G?` without an
+/// allowedSignersFile, so we must not rely on verification here).
+///
+/// Uses a single `git cat-file --batch` pass, framed by the byte sizes it
+/// reports, so it is correct for arbitrary (multi-byte) commit content.
+pub fn signed_set(repo: &str, hashes: &[String]) -> HashSet<String> {
+    if hashes.is_empty() {
+        return HashSet::new();
+    }
+    let stdin = format!("{}\n", hashes.join("\n"));
+    match git::run_bytes(repo, &["cat-file", "--batch"], Some(&stdin)) {
+        Ok(out) => parse_batch_signed(&out),
+        Err(_) => HashSet::new(),
+    }
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoInfo {
     /// Absolute path to the repository top level.
@@ -87,7 +90,7 @@ pub struct RepoInfo {
     pub ahead_of_upstream: Option<u32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
     pub hash: String,
@@ -157,7 +160,7 @@ pub fn open_repo(path: &str) -> Result<RepoInfo, String> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Branch {
     pub name: String,
@@ -259,4 +262,61 @@ pub fn list_commits(repo: &str, branch: &str, limit: u32) -> Result<Vec<Commit>,
     }
 
     Ok(commits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_subslice_basic() {
+        let h = b"hello world\n\ngoodbye";
+        assert_eq!(find_subslice(h, b"\n\n"), Some(11));
+        assert_eq!(find_subslice(h, b"hello"), Some(0));
+        assert_eq!(find_subslice(h, b"missing"), None);
+        assert_eq!(find_subslice(h, b""), None);
+    }
+
+    #[test]
+    fn test_parse_batch_signed_signed_and_unsigned() {
+        let raw_signed = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
+gpgsig -----BEGIN SSH SIGNATURE-----\n\
+ U1NIU0lHAAAA...==\n\
+ -----END SSH SIGNATURE-----\n\
+author Test <test@test.com> 1700000000 +0000\n\
+committer Test <test@test.com> 1700000000 +0000\n\
+\n\
+Signed commit message\n";
+
+        let raw_unsigned = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
+author Test <test@test.com> 1700000000 +0000\n\
+committer Test <test@test.com> 1700000000 +0000\n\
+\n\
+Unsigned commit message\n";
+
+        let mut output = Vec::new();
+        // Item 1: signed
+        output.extend_from_slice(format!("sha1commit commit {}\n", raw_signed.len()).as_bytes());
+        output.extend_from_slice(raw_signed);
+        output.push(b'\n');
+
+        // Item 2: unsigned
+        output.extend_from_slice(format!("sha2commit commit {}\n", raw_unsigned.len()).as_bytes());
+        output.extend_from_slice(raw_unsigned);
+        output.push(b'\n');
+
+        // Item 3: missing
+        output.extend_from_slice(b"sha3missing missing\n");
+
+        let signed = parse_batch_signed(&output);
+        assert!(signed.contains("sha1commit"));
+        assert!(!signed.contains("sha2commit"));
+        assert!(!signed.contains("sha3missing"));
+    }
+
+    #[test]
+    fn test_parse_batch_signed_empty() {
+        let signed = parse_batch_signed(b"");
+        assert!(signed.is_empty());
+    }
 }

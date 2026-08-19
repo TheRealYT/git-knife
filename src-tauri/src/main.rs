@@ -4,6 +4,7 @@
 mod backup;
 mod commits;
 mod git;
+mod lock;
 mod rewrite;
 
 use backup::Backup;

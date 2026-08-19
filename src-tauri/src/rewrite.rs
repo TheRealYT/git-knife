@@ -7,8 +7,8 @@
 //! the metadata (message, author/committer name/email/date) differs, and every
 //! descendant hash is recomputed correctly.
 //!
-//! MVP scope: linear history only. If a merge commit falls inside the rewrite
-//! range we refuse rather than silently mangle it.
+//! Non-linear DAG history and merge commits are fully supported: git-knife
+//! reconstructs the full commit graph, preserving all parents for each merge commit.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,12 +17,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::commits;
 use crate::git;
+use crate::lock::RepoLock;
 
 const US: char = '\u{1f}';
 const RS: char = '\u{1e}';
 
 /// A set of field overrides for a single commit. Any `None` field is left as-is.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitEdit {
     pub hash: String,
@@ -43,7 +44,7 @@ pub struct CommitEdit {
     pub message: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldChange {
     pub hash: String,
@@ -52,7 +53,7 @@ pub struct FieldChange {
     pub new_value: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyResult {
     pub new_head: String,
@@ -61,25 +62,26 @@ pub struct ApplyResult {
 }
 
 /// Raw commit data needed to faithfully rebuild a commit.
-struct RawCommit {
-    hash: String,
-    tree: String,
-    parents: Vec<String>,
-    author_name: String,
-    author_email: String,
-    author_date: String,
-    committer_name: String,
-    committer_email: String,
-    committer_date: String,
-    message: String, // %B, the raw message
-    signed: bool,    // had a signature before the rewrite
+#[derive(Debug, Clone)]
+pub struct RawCommit {
+    pub hash: String,
+    pub tree: String,
+    pub parents: Vec<String>,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committer_date: String,
+    pub message: String, // %B, the raw message
+    pub signed: bool,    // had a signature before the rewrite
 }
 
 /// Read the full ancestry of `head` in topological order (a parent never
 /// appears before its children), newest first, including tree + raw message.
 /// Reversing the result yields parents-before-children, which the DAG rebuild
 /// relies on.
-fn read_chain(repo: &str, head: &str) -> Result<Vec<RawCommit>, String> {
+pub fn read_chain(repo: &str, head: &str) -> Result<Vec<RawCommit>, String> {
     let fmt = format!(
         "--format=%H{US}%T{US}%P{US}%an{US}%ae{US}%aI{US}%cn{US}%ce{US}%cI{US}%B{RS}"
     );
@@ -122,11 +124,27 @@ fn read_chain(repo: &str, head: &str) -> Result<Vec<RawCommit>, String> {
 }
 
 /// Resolve the effective value: a non-empty edit override, else the original.
-fn pick(edit: Option<&Option<String>>, original: &str) -> String {
+pub fn pick(edit: Option<&Option<String>>, original: &str) -> String {
     match edit.and_then(|o| o.as_ref()) {
         Some(v) if !v.is_empty() => v.clone(),
         _ => original.to_string(),
     }
+}
+
+/// Configuration parameters required to build a commit with `git commit-tree`.
+#[derive(Debug, Clone)]
+pub struct CommitTreeConfig<'a> {
+    pub repo: &'a str,
+    pub tree: &'a str,
+    pub parents: &'a [String],
+    pub author_name: &'a str,
+    pub author_email: &'a str,
+    pub author_date: &'a str,
+    pub committer_name: &'a str,
+    pub committer_email: &'a str,
+    pub committer_date: &'a str,
+    pub message: &'a str,
+    pub sign: bool,
 }
 
 /// Build a single commit via `git commit-tree`, reusing `tree` and attaching
@@ -135,46 +153,33 @@ fn pick(edit: Option<&Option<String>>, original: &str) -> String {
 ///
 /// When `sign` is set, the commit is signed with the user's configured key
 /// (`user.signingkey` / `gpg.format`), preserving a previously-signed commit.
-#[allow(clippy::too_many_arguments)]
-fn commit_tree(
-    repo: &str,
-    tree: &str,
-    parents: &[String],
-    author_name: &str,
-    author_email: &str,
-    author_date: &str,
-    committer_name: &str,
-    committer_email: &str,
-    committer_date: &str,
-    message: &str,
-    sign: bool,
-) -> Result<String, String> {
+pub fn commit_tree(config: &CommitTreeConfig) -> Result<String, String> {
     let mut args: Vec<String> = vec!["commit-tree".to_string()];
-    if sign {
+    if config.sign {
         args.push("-S".to_string());
     }
-    args.push(tree.to_string());
-    for p in parents {
+    args.push(config.tree.to_string());
+    for p in config.parents {
         args.push("-p".to_string());
         args.push(p.clone());
     }
 
     let env = [
-        ("GIT_AUTHOR_NAME", author_name),
-        ("GIT_AUTHOR_EMAIL", author_email),
-        ("GIT_AUTHOR_DATE", author_date),
-        ("GIT_COMMITTER_NAME", committer_name),
-        ("GIT_COMMITTER_EMAIL", committer_email),
-        ("GIT_COMMITTER_DATE", committer_date),
+        ("GIT_AUTHOR_NAME", config.author_name),
+        ("GIT_AUTHOR_EMAIL", config.author_email),
+        ("GIT_AUTHOR_DATE", config.author_date),
+        ("GIT_COMMITTER_NAME", config.committer_name),
+        ("GIT_COMMITTER_EMAIL", config.committer_email),
+        ("GIT_COMMITTER_DATE", config.committer_date),
     ];
 
-    let mut msg = message.to_string();
+    let mut msg = config.message.to_string();
     if !msg.ends_with('\n') {
         msg.push('\n');
     }
 
     let argrefs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = git::run(repo, &argrefs, &env, Some(&msg))?;
+    let out = git::run(config.repo, &argrefs, &env, Some(&msg))?;
     Ok(out.trim().to_string())
 }
 
@@ -260,33 +265,16 @@ fn add_signature(repo: &str, commit: &str, count: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply edits: rebuild the chain, save a backup ref, then move the branch.
+/// Computes the set of commit hashes that must be rebuilt.
 ///
-/// * `sign`   — attach a transparent git-knife signature note to the new tip.
-/// * `resign` — re-sign rebuilt commits that were signed before, with the
-///   user's configured key (otherwise a rewrite silently drops signatures).
-pub fn apply_edits(
-    path: &str,
-    branch: &str,
-    edits: &[CommitEdit],
-    sign: bool,
-    resign: bool,
-) -> Result<ApplyResult, String> {
-    let info = commits::open_repo(path)?;
-    let repo = info.path.as_str();
-    // Resolve the tip of the *selected* branch (not necessarily HEAD).
-    let head = git::run(repo, &["rev-parse", branch], &[], None)?
-        .trim()
-        .to_string();
-
-    let chain = read_chain(repo, &head)?;
-    let edit_map: HashMap<&str, &CommitEdit> =
-        edits.iter().map(|e| (e.hash.as_str(), e)).collect();
-
-    // A commit must be rebuilt if it is edited or descends from an edited
-    // commit. Processing oldest→newest (chain is topo-ordered newest-first, so
-    // iterate reversed), a commit needs rebuilding when it is edited or any of
-    // its parents already does. This naturally spans merges and side branches.
+/// A commit must be rebuilt if it is edited or descends from an edited commit.
+/// Processing oldest→newest (chain is topo-ordered newest-first, so iterate reversed),
+/// a commit needs rebuilding when it is edited or any of its parents already does.
+/// This naturally spans merges and side branches.
+pub fn compute_rewrite_set(
+    chain: &[RawCommit],
+    edit_map: &HashMap<&str, &CommitEdit>,
+) -> HashSet<String> {
     let mut rewrite: HashSet<String> = HashSet::new();
     for c in chain.iter().rev() {
         let edited = edit_map.contains_key(c.hash.as_str());
@@ -295,15 +283,23 @@ pub fn apply_edits(
             rewrite.insert(c.hash.clone());
         }
     }
-    if rewrite.is_empty() {
-        return Err("Nothing to apply — edited commits not found in this history.".to_string());
-    }
+    rewrite
+}
 
-    // Rebuild every commit in the set, oldest first, mapping each original
-    // parent to its rewritten hash (or keeping it if that ancestor is untouched).
+/// Rebuild every commit in the rewrite set, oldest first, mapping each original
+/// parent to its rewritten hash (or keeping it if that ancestor is untouched).
+///
+/// Returns a map of original commit hashes to their newly created commit hashes.
+pub fn rebuild_chain(
+    repo: &str,
+    chain: &[RawCommit],
+    rewrite_set: &HashSet<String>,
+    edit_map: &HashMap<&str, &CommitEdit>,
+    resign: bool,
+) -> Result<HashMap<String, String>, String> {
     let mut map: HashMap<String, String> = HashMap::new();
     for c in chain.iter().rev() {
-        if !rewrite.contains(&c.hash) {
+        if !rewrite_set.contains(&c.hash) {
             continue;
         }
         let e = edit_map.get(c.hash.as_str()).copied();
@@ -325,20 +321,21 @@ pub fn apply_edits(
             .map(|p| map.get(p).cloned().unwrap_or_else(|| p.clone()))
             .collect();
 
-        let nh = commit_tree(
+        let config = CommitTreeConfig {
             repo,
-            &c.tree,
-            &new_parents,
-            &author_name,
-            &author_email,
-            &author_date,
-            &committer_name,
-            &committer_email,
-            &committer_date,
-            &message,
-            resign && c.signed,
-        )
-        .map_err(|err| {
+            tree: &c.tree,
+            parents: &new_parents,
+            author_name: &author_name,
+            author_email: &author_email,
+            author_date: &author_date,
+            committer_name: &committer_name,
+            committer_email: &committer_email,
+            committer_date: &committer_date,
+            message: &message,
+            sign: resign && c.signed,
+        };
+
+        let nh = commit_tree(&config).map_err(|err| {
             if resign && c.signed {
                 format!(
                     "Failed to re-sign commit {} — is a signing key configured \
@@ -351,20 +348,25 @@ pub fn apply_edits(
         })?;
         map.insert(c.hash.clone(), nh);
     }
+    Ok(map)
+}
 
-    let new_head = map
-        .get(&head)
-        .cloned()
-        .ok_or_else(|| "internal error: branch tip was not rebuilt".to_string())?;
-    let rewritten_count = rewrite.len() as u32;
-
+/// Atomically save a backup ref and update the branch ref to point at the new tip.
+pub fn update_refs(
+    repo: &str,
+    branch: &str,
+    old_head: &str,
+    new_head: &str,
+    rewritten_count: u32,
+    sign: bool,
+) -> Result<ApplyResult, String> {
     // Save a backup ref pointing at the old tip before moving anything.
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let backup_ref = format!("refs/knife-backup/{branch}/{ts}");
-    git::run(repo, &["update-ref", &backup_ref, &head], &[], None)?;
+    git::run(repo, &["update-ref", &backup_ref, old_head], &[], None)?;
 
     // Move the branch ref with a compare-and-swap on the old tip. Editing a
     // branch by its ref never touches the working tree; when it happens to be
@@ -373,23 +375,173 @@ pub fn apply_edits(
     if branch == "HEAD" {
         git::run(
             repo,
-            &["update-ref", "--no-deref", "HEAD", &new_head, &head],
+            &["update-ref", "--no-deref", "HEAD", new_head, old_head],
             &[],
             None,
         )?;
     } else {
         let refname = format!("refs/heads/{branch}");
-        git::run(repo, &["update-ref", &refname, &new_head, &head], &[], None)?;
+        git::run(repo, &["update-ref", &refname, new_head, old_head], &[], None)?;
     }
 
     // Optional, transparent signature note. Best-effort: never fail the rewrite.
     if sign {
-        let _ = add_signature(repo, &new_head, rewritten_count);
+        let _ = add_signature(repo, new_head, rewritten_count);
     }
 
     Ok(ApplyResult {
-        new_head,
+        new_head: new_head.to_string(),
         backup_ref,
         rewritten_count,
     })
+}
+
+/// Apply edits: acquire advisory repo lock, rebuild the chain, save a backup ref,
+/// and update the branch.
+///
+/// * `sign`   — attach a transparent git-knife signature note to the new tip.
+/// * `resign` — re-sign rebuilt commits that were signed before, with the
+///   user's configured key (otherwise a rewrite silently drops signatures).
+pub fn apply_edits(
+    path: &str,
+    branch: &str,
+    edits: &[CommitEdit],
+    sign: bool,
+    resign: bool,
+) -> Result<ApplyResult, String> {
+    let info = commits::open_repo(path)?;
+    let repo = info.path.as_str();
+
+    // Acquire advisory file lock to prevent race conditions with concurrent operations.
+    let _lock = RepoLock::acquire(repo)?;
+
+    // Resolve the tip of the *selected* branch (not necessarily HEAD).
+    let head = git::run(repo, &["rev-parse", branch], &[], None)?
+        .trim()
+        .to_string();
+
+    let chain = read_chain(repo, &head)?;
+    let edit_map: HashMap<&str, &CommitEdit> =
+        edits.iter().map(|e| (e.hash.as_str(), e)).collect();
+
+    let rewrite = compute_rewrite_set(&chain, &edit_map);
+    if rewrite.is_empty() {
+        return Err("Nothing to apply — edited commits not found in this history.".to_string());
+    }
+
+    let map = rebuild_chain(repo, &chain, &rewrite, &edit_map, resign)?;
+
+    let new_head = map
+        .get(&head)
+        .cloned()
+        .ok_or_else(|| "internal error: branch tip was not rebuilt".to_string())?;
+    let rewritten_count = rewrite.len() as u32;
+
+    update_refs(repo, branch, &head, &new_head, rewritten_count, sign)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pick_returns_edit_when_nonempty() {
+        let edit = Some("alice@example.com".to_string());
+        let original = "bob@example.com";
+        assert_eq!(pick(Some(&edit), original), "alice@example.com");
+    }
+
+    #[test]
+    fn test_pick_returns_original_when_empty_or_none() {
+        let empty = Some("".to_string());
+        let none: Option<String> = None;
+        let original = "bob@example.com";
+        assert_eq!(pick(Some(&empty), original), original);
+        assert_eq!(pick(Some(&none), original), original);
+        assert_eq!(pick(None, original), original);
+    }
+
+    fn make_test_commit(hash: &str, parents: Vec<&str>) -> RawCommit {
+        RawCommit {
+            hash: hash.to_string(),
+            tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_string(),
+            parents: parents.into_iter().map(str::to_string).collect(),
+            author_name: "Author".to_string(),
+            author_email: "author@test.com".to_string(),
+            author_date: "2024-01-01T12:00:00+00:00".to_string(),
+            committer_name: "Committer".to_string(),
+            committer_email: "committer@test.com".to_string(),
+            committer_date: "2024-01-01T12:00:00+00:00".to_string(),
+            message: "Commit message\n".to_string(),
+            signed: false,
+        }
+    }
+
+    #[test]
+    fn test_compute_rewrite_set_linear_propagation() {
+        // Linear chain: C3 -> C2 -> C1
+        let c1 = make_test_commit("c1", vec![]);
+        let c2 = make_test_commit("c2", vec!["c1"]);
+        let c3 = make_test_commit("c3", vec!["c2"]);
+        let chain = vec![c3, c2, c1]; // newest first
+
+        let edit_c2 = CommitEdit {
+            hash: "c2".to_string(),
+            author_name: Some("New Name".to_string()),
+            ..Default::default()
+        };
+        let mut edits = HashMap::new();
+        edits.insert("c2", &edit_c2);
+
+        let rewrite = compute_rewrite_set(&chain, &edits);
+        assert_eq!(rewrite.len(), 2);
+        assert!(rewrite.contains("c2"));
+        assert!(rewrite.contains("c3"));
+        assert!(!rewrite.contains("c1"));
+    }
+
+    #[test]
+    fn test_compute_rewrite_set_merge_commit_propagation() {
+        // DAG with merge:
+        // C4 (merge c3, c2b)
+        // c3 -> c2a -> c1
+        // c2b -> c1
+        let c1 = make_test_commit("c1", vec![]);
+        let c2a = make_test_commit("c2a", vec!["c1"]);
+        let c2b = make_test_commit("c2b", vec!["c1"]);
+        let c3 = make_test_commit("c3", vec!["c2a"]);
+        let c4 = make_test_commit("c4", vec!["c3", "c2b"]);
+        let chain = vec![c4, c3, c2b, c2a, c1]; // topo-ordered newest first
+
+        // Edit c2b (side branch)
+        let edit_c2b = CommitEdit {
+            hash: "c2b".to_string(),
+            message: Some("Updated branch msg".to_string()),
+            ..Default::default()
+        };
+        let mut edits = HashMap::new();
+        edits.insert("c2b", &edit_c2b);
+
+        let rewrite = compute_rewrite_set(&chain, &edits);
+        assert!(rewrite.contains("c2b"));
+        assert!(rewrite.contains("c4")); // merge commit must be rebuilt
+        assert!(!rewrite.contains("c1"));
+        assert!(!rewrite.contains("c2a"));
+        assert!(!rewrite.contains("c3"));
+    }
+
+    #[test]
+    fn test_compute_rewrite_set_no_matches() {
+        let c1 = make_test_commit("c1", vec![]);
+        let chain = vec![c1];
+        let edit_other = CommitEdit {
+            hash: "c_unknown".to_string(),
+            ..Default::default()
+        };
+        let mut edits = HashMap::new();
+        edits.insert("c_unknown", &edit_other);
+
+        let rewrite = compute_rewrite_set(&chain, &edits);
+        assert!(rewrite.is_empty());
+    }
 }

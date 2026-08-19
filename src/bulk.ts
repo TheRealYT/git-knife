@@ -41,8 +41,42 @@ export interface BulkResult {
   error: string | null;
 }
 
-function escapeRegExp(s: string): string {
+export const MAX_REGEX_EXEC_TIME_MS = 250;
+
+/**
+ * Escapes characters with special meaning in regular expressions.
+ */
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Checks for common catastrophic backtracking patterns (nested quantifiers, overlapping alternations).
+ */
+export function checkRegexSafety(pattern: string): string | null {
+  // Check for nested quantifiers like (a+)+, (.*)*, (a|b+)+, (\w+)*, ([a-z]+)+
+  const nestedQuantifierRegex = /\((?:[^()]*[+*]|\\[dswDSW][+*]|\[[^\]]*\][+*])+\)[+*{]/;
+  if (nestedQuantifierRegex.test(pattern)) {
+    return "Potentially unsafe regex pattern: nested quantifiers detected (risk of catastrophic backtracking / ReDoS).";
+  }
+
+  // Check for overlapping alternations with repetitive outer quantifier
+  const match = pattern.match(/\(([^()|]+)\|([^()|]+)\)[+*{]/);
+  if (match) {
+    const branch1 = match[1].trim();
+    const branch2 = match[2].trim();
+    if (
+      branch1 === branch2 ||
+      branch1.includes(".*") ||
+      branch2.includes(".*") ||
+      branch1.includes(".+") ||
+      branch2.includes(".+")
+    ) {
+      return "Potentially unsafe regex pattern: overlapping alternations detected.";
+    }
+  }
+
+  return null;
 }
 
 /** Current effective value of a field (a pending edit if any, else the original). */
@@ -77,6 +111,14 @@ export function computeBulk(
   };
   if (!spec.find || spec.fields.length === 0) return out;
 
+  if (spec.regex) {
+    const safetyErr = checkRegexSafety(spec.find);
+    if (safetyErr) {
+      out.error = safetyErr;
+      return out;
+    }
+  }
+
   let re: RegExp;
   try {
     const flags = "g" + (spec.caseSensitive ? "" : "i");
@@ -89,7 +131,18 @@ export function computeBulk(
   // In literal mode, keep `$` in the replacement literal (no $1 backrefs).
   const replacement = spec.regex ? spec.replace : spec.replace.replace(/\$/g, "$$$$");
 
+  const startTime = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const getTime = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
   for (const c of commits) {
+    if (getTime() - startTime > MAX_REGEX_EXEC_TIME_MS) {
+      out.error = "Regex execution timed out (potential ReDoS). Please refine or simplify your pattern.";
+      out.edits = {};
+      out.matchedCommits = 0;
+      out.replacements = 0;
+      return out;
+    }
+
     const changed: Partial<Record<BulkField, string>> = {};
     let count = 0;
 
