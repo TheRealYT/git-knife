@@ -15,11 +15,20 @@ use rewrite::{ApplyResult, CommitEdit, FieldChange};
 /// started in. Without one, that directory itself if it is inside a repo, so
 /// `git knife` opens the current repo; a launch from the Start menu or Dock
 /// (started in System32 or `/`) opens nothing. Arguments starting with `-` are
-/// ignored (older macOS adds `-psn_…` when launched from Finder).
+/// ignored (older macOS adds `-psn_…` when launched from Finder), except after
+/// `--`: `git-knife -- -dirname`.
 #[tauri::command]
 fn initial_path() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
-    match std::env::args().skip(1).find(|a| !a.starts_with('-')) {
+    let mut after_dashes = false;
+    let path_arg = std::env::args().skip(1).find(|a| {
+        if !after_dashes && a == "--" {
+            after_dashes = true;
+            return false;
+        }
+        after_dashes || !a.starts_with('-')
+    });
+    match path_arg {
         Some(arg) => Some(cwd.join(arg).to_string_lossy().into_owned()),
         None => commits::open_repo(&cwd.to_string_lossy())
             .ok()
