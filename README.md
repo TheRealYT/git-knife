@@ -67,6 +67,13 @@ pnpm tauri dev
 
 The first `cargo` build downloads and compiles the Tauri crates (a few minutes).
 
+Dev runs start in `src-tauri/`, so they open git-knife's own repo. To open
+another one, pass its absolute path after a second `--`:
+
+```bash
+pnpm tauri dev -- -- /path/to/repository
+```
+
 ## Build a bundle
 
 ```bash
@@ -97,7 +104,13 @@ up yet, so macOS/Windows builds are unsigned — fine for early testers.
 
 1. **Open** a repository (Browse… or paste the path), then pick a **branch**
    from the dropdown — git-knife edits it by its ref, without checking it out,
-   so your working tree and current checkout stay exactly as they are.
+   so your working tree and current checkout stay exactly as they are.  
+   You can supply a branch name and/or path to a repository as arguments: 
+   `git-knife [--] [path] [branch]`. If git-knife is in your PATH, `git knife`
+   or `git knife branchname` work on the current repository. To use autocomplete
+   in `git knife …`, instead of putting it in PATH, use a git alias:
+   `git config --global alias.knife '!f(){ : switch; cd "${GIT_PREFIX:-.}" && 
+   "/path to/git-knife" "$@" & }; f'`
 2. Click any **non-merge** commit to expand its editor.
 3. Change the message, author/committer name, email, or dates. Edited rows are
    highlighted; the date fields keep the commit's original UTC offset.
