@@ -10,6 +10,16 @@ use backup::Backup;
 use commits::{Branch, Commit, RepoInfo};
 use rewrite::{ApplyResult, CommitEdit, FieldChange};
 
+/// The repository given on the command line (`git-knife <path>`), made
+/// absolute against the directory git-knife was started in, so `git-knife .`
+/// opens the current repo. Flags (e.g. macOS's `-psn_…`) are skipped.
+#[tauri::command]
+fn initial_path() -> Option<String> {
+    let arg = std::env::args().skip(1).find(|a| !a.starts_with('-'))?;
+    let cwd = std::env::current_dir().ok()?;
+    Some(cwd.join(arg).to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn open_repo(path: String) -> Result<RepoInfo, String> {
     commits::open_repo(&path)
@@ -59,6 +69,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            initial_path,
             open_repo,
             list_branches,
             list_commits,

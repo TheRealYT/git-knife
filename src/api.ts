@@ -9,7 +9,9 @@ import type {
   RepoInfo,
 } from "./types";
 
-export const openRepo = (path: string) => invoke<RepoInfo>("open_repo", { path });
+export const initialPath = () => invoke<string | null>("initial_path");
+
+export const openRepo =(path: string) => invoke<RepoInfo>("open_repo", { path });
 
 export const listBranches = (path: string) =>
   invoke<Branch[]>("list_branches", { path });

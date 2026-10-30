@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
 import {
   applyEdits,
+  initialPath,
   listBackups,
   listBranches,
   listCommits,
@@ -141,6 +142,19 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  // Open the repo that was passed as argument, once (StrictMode runs effects twice in dev).
+  const openedInitial = useRef(false);
+  useEffect(() => {
+    if (openedInitial.current) return;
+    openedInitial.current = true;
+    initialPath().then((p) => {
+      if (p) {
+        setPathInput(p);
+        doOpen(p);
+      }
+    });
+  }, []);
 
   async function selectBranch(name: string) {
     if (!repo || name === branch) return;

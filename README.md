@@ -67,6 +67,13 @@ pnpm tauri dev
 
 The first `cargo` build downloads and compiles the Tauri crates (a few minutes).
 
+To open a repository right away, pass it after a second `--` (dev runs start
+in `src-tauri/`, so use an absolute path):
+
+```bash
+pnpm tauri dev -- -- /path/to/repository
+```
+
 ## Build a bundle
 
 ```bash
@@ -95,7 +102,8 @@ up yet, so macOS/Windows builds are unsigned — fine for early testers.
 
 ### Edit a commit
 
-1. **Open** a repository (Browse… or paste the path), then pick a **branch**
+1. **Open** a repository (Browse… or paste the path, or start git-knife with
+   it: `git-knife .`) then pick a **branch**
    from the dropdown — git-knife edits it by its ref, without checking it out,
    so your working tree and current checkout stay exactly as they are.
 2. Click any **non-merge** commit to expand its editor.
