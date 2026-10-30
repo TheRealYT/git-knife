@@ -6,10 +6,11 @@ import type {
   Commit,
   CommitEdit,
   FieldChange,
+  InitialRepo,
   RepoInfo,
 } from "./types";
 
-export const initialPath = () => invoke<string | null>("initial_path");
+export const initialRepo = () => invoke<InitialRepo | null>("initial_repo");
 
 export const openRepo =(path: string) => invoke<RepoInfo>("open_repo", { path });
 

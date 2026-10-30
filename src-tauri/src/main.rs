@@ -6,33 +6,60 @@ mod commits;
 mod git;
 mod rewrite;
 
+use serde::Serialize;
+
 use backup::Backup;
 use commits::{Branch, Commit, RepoInfo};
 use rewrite::{ApplyResult, CommitEdit, FieldChange};
 
-/// The repository to open at startup: the path given on the command line
-/// (`git-knife <path>`), made absolute against the directory git-knife was
-/// started in. Without one, that directory itself if it is inside a repo, so
-/// `git knife` opens the current repo; a launch from the Start menu or Dock
-/// (started in System32 or `/`) opens nothing. Arguments starting with `-` are
-/// ignored (older macOS adds `-psn_…` when launched from Finder), except after
-/// `--`: `git-knife -- -dirname`.
+#[derive(Serialize)]
+pub struct InitialRepo {
+    path: String,
+    branch: Option<String>,
+}
+
+/// The repository and/or branch to open at startup, from the command line:
+///
+/// - `git-knife <path> <branch>`
+/// - `git-knife <path>`: when `<path>` is a directory
+/// - `git-knife <branch>`: otherwise, in the repo of the directory git-knife
+///   was started in, so `git knife <branch>` works inside a repo
+/// - `git-knife`: that repo, if the directory is inside one; a launch from the
+///   Start menu or Dock (usually in System32 or `/`) or any other path that is
+///   not a git repository opens nothing.
+///
+/// Paths are made absolute against the directory git-knife was started in.
+/// Arguments starting with `-` are ignored (older macOS adds `-psn_…` when
+/// launched from Finder), except after `--`: `git-knife -- -dirname`.
 #[tauri::command]
-fn initial_path() -> Option<String> {
+fn initial_repo() -> Option<InitialRepo> {
     let cwd = std::env::current_dir().ok()?;
     let mut after_dashes = false;
-    let path_arg = std::env::args().skip(1).find(|a| {
-        if !after_dashes && a == "--" {
-            after_dashes = true;
-            return false;
-        }
-        after_dashes || !a.starts_with('-')
-    });
-    match path_arg {
-        Some(arg) => Some(cwd.join(arg).to_string_lossy().into_owned()),
-        None => commits::open_repo(&cwd.to_string_lossy())
-            .ok()
-            .map(|info| info.path),
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| {
+            if !after_dashes && a == "--" {
+                after_dashes = true;
+                return false;
+            }
+            after_dashes || !a.starts_with('-')
+        })
+        .collect();
+    let path_of = |arg: &str| cwd.join(arg).to_string_lossy().into_owned();
+    let cwd_repo = || commits::open_repo(&cwd.to_string_lossy()).ok().map(|i| i.path);
+    match args.as_slice() {
+        [] => cwd_repo().map(|path| InitialRepo { path, branch: None }),
+        [one] if cwd.join(one).is_dir() => Some(InitialRepo { path: path_of(one), branch: None }),
+        // Not a directory and not in a repo: a mistyped path, let opening it
+        // report that.
+        [one] => Some(match cwd_repo() {
+            Some(path) => InitialRepo { path, branch: Some(one.clone()) },
+            None => InitialRepo { path: path_of(one), branch: None },
+        }),
+        [path, branch, ..] => Some(InitialRepo {
+            path: path_of(path),
+            branch: Some(branch.clone()),
+        }),
     }
 }
 
@@ -85,7 +112,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            initial_path,
+            initial_repo,
             open_repo,
             list_branches,
             list_commits,

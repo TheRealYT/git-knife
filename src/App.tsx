@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
 import {
   applyEdits,
-  initialPath,
+  initialRepo,
   listBackups,
   listBranches,
   listCommits,
@@ -112,7 +112,7 @@ export default function App() {
     setBackups(bs);
   }
 
-  async function doOpen(path: string) {
+  async function doOpen(path: string, wantedBranch?: string) {
     if (!path.trim()) return;
     setBusy(true);
     setError(null);
@@ -120,7 +120,9 @@ export default function App() {
     try {
       const info = await openRepo(path.trim());
       const brs = await listBranches(info.path);
+      const wanted = brs.find((b) => b.name === wantedBranch)?.name;
       const initial =
+        wanted ??
         brs.find((b) => b.name === info.branch)?.name ??
         brs.find((b) => b.isHead)?.name ??
         brs[0]?.name ??
@@ -132,6 +134,9 @@ export default function App() {
       setEdits({});
       setExpanded(null);
       await reload(info.path, initial);
+      if (wantedBranch && !wanted) {
+        setError(`No local branch "${wantedBranch}" — showing ${initial}`);
+      }
     } catch (e) {
       setRepo(null);
       setBranches([]);
@@ -143,15 +148,15 @@ export default function App() {
     }
   }
 
-  // Open the repo that was passed as argument, once (StrictMode runs effects twice in dev).
+  // Open the repo (and branch) passed as arguments, once (StrictMode runs effects twice in dev).
   const openedInitial = useRef(false);
   useEffect(() => {
     if (openedInitial.current) return;
     openedInitial.current = true;
-    initialPath().then((p) => {
-      if (p) {
-        setPathInput(p);
-        doOpen(p);
+    initialRepo().then((r) => {
+      if (r) {
+        setPathInput(r.path);
+        doOpen(r.path, r.branch ?? undefined);
       }
     });
   }, []);

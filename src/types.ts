@@ -1,3 +1,9 @@
+/** The repository (and branch) given on the command line. */
+export interface InitialRepo {
+  path: string;
+  branch: string | null;
+}
+
 export interface RepoInfo {
   path: string;
   branch: string;
