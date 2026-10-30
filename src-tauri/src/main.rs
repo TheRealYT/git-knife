@@ -10,14 +10,21 @@ use backup::Backup;
 use commits::{Branch, Commit, RepoInfo};
 use rewrite::{ApplyResult, CommitEdit, FieldChange};
 
-/// The repository given on the command line (`git-knife <path>`), made
-/// absolute against the directory git-knife was started in, so `git-knife .`
-/// opens the current repo. Flags (e.g. macOS's `-psn_…`) are skipped.
+/// The repository to open at startup: the path given on the command line
+/// (`git-knife <path>`), made absolute against the directory git-knife was
+/// started in. Without one, that directory itself if it is inside a repo, so
+/// `git knife` opens the current repo; a launch from the Start menu or Dock
+/// (started in System32 or `/`) opens nothing. Arguments starting with `-` are
+/// ignored (older macOS adds `-psn_…` when launched from Finder).
 #[tauri::command]
 fn initial_path() -> Option<String> {
-    let arg = std::env::args().skip(1).find(|a| !a.starts_with('-'))?;
     let cwd = std::env::current_dir().ok()?;
-    Some(cwd.join(arg).to_string_lossy().into_owned())
+    match std::env::args().skip(1).find(|a| !a.starts_with('-')) {
+        Some(arg) => Some(cwd.join(arg).to_string_lossy().into_owned()),
+        None => commits::open_repo(&cwd.to_string_lossy())
+            .ok()
+            .map(|info| info.path),
+    }
 }
 
 #[tauri::command]
